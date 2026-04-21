@@ -25,8 +25,8 @@ export class AuthHttpService {
       }
       res.send(
         this.authPageTemplate
-          .replaceAll("{{prompt}}", prompt)
-          .replaceAll("{{token}}", token)
+          .replaceAll("{{PROMPT}}", prompt)
+          .replaceAll("{{TOKEN}}", token)
       );
     });
 

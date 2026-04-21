@@ -88,6 +88,7 @@ export async function startApp(): Promise<void> {
     authChallenges,
     sessions,
     mtprotoService,
+    notifications,
     logger
   );
 

@@ -79,7 +79,6 @@ export class Store {
           if (username.trim()) existing.username = username;
           if (firstName.trim()) existing.firstName = firstName;
           if (lastName.trim()) existing.lastName = lastName;
-          existing.totalRequests += 1;
           existing.lastSeenAt = now;
         } else {
           this.backing.users.push({
@@ -87,7 +86,6 @@ export class Store {
             username,
             firstName,
             lastName,
-            totalRequests: 1,
             lastSeenAt: now
           });
         }

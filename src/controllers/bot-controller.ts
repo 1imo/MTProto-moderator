@@ -12,9 +12,7 @@ export class BotController {
   async handleStart(userId: number): Promise<void> {
     await this.guard(
       async () => {
-        await this.onboarding.onStart(userId, async (text) => {
-          await this.notifications.sendToClient(String(userId), text);
-        });
+        await this.onboarding.onStart(userId);
       },
       async () => {
         await this.notifications.sendToClient(String(userId), "command failed");
@@ -28,9 +26,7 @@ export class BotController {
   ): Promise<void> {
     await this.guard(
       async () => {
-        await this.onboarding.onText(userId, text, async (reply) => {
-          await this.notifications.sendToClient(String(userId), reply);
-        });
+        await this.onboarding.onText(userId, text);
       },
       async () => {
         await this.notifications.sendToClient(String(userId), "message handling failed");

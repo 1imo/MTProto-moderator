@@ -32,7 +32,6 @@ type DbShape = {
     username: string;
     firstName: string;
     lastName: string;
-    totalRequests: number;
     lastSeenAt: string;
   }>;
   groupChats: Array<{
