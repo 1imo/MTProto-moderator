@@ -5,7 +5,7 @@ Single-codebase Telegram moderation runtime using:
 - MTProto listener (GramJS)
 - Management bot (Telegraf) for onboarding
 - Deterministic auto-moderation flow (no AI)
-- JSON persistence
+- PostgreSQL persistence
 - Composition root DI in `src/root.ts`
 
 ## Quick start
@@ -18,7 +18,7 @@ Single-codebase Telegram moderation runtime using:
 
 ## Ops scripts
 
-- `npm run ops:create-db` initializes the JSON datastore at `DATABASE_PATH`.
+- `npm run ops:create-db` initializes PostgreSQL tables from `assets/db.sql`.
 
 ## Core flow
 

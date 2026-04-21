@@ -1,116 +1,66 @@
-import fs from "node:fs";
-import path from "node:path";
-import type { ModerationDecision } from "../../types.js";
-import type { Env } from "../env.js";
-
-type DbShape = {
-  messages: Array<{
-    senderId: string;
-    chatId: string;
-    createdAt: string;
-  }>;
-  actionLogs: Array<{
-    senderId: string;
-    chatId: string;
-    decision: ModerationDecision;
-    createdAt: string;
-  }>;
-  sessions: Array<{
-    userId: string;
-    sessionString: string;
-    active: boolean;
-    createdAt: string;
-    updatedAt: string;
-  }>;
-  analyticsEvents: Array<{
-    event: string;
-    props: Record<string, unknown>;
-    createdAt: string;
-  }>;
-  users: Array<{
-    telegramId: number;
-    username: string;
-    firstName: string;
-    lastName: string;
-    lastSeenAt: string;
-  }>;
-  groupChats: Array<{
-    telegramId: number;
-    firstSeenAt: string;
-    lastSeenAt: string;
-  }>;
-};
-
-const emptyState = (): DbShape => ({
-  messages: [],
-  actionLogs: [],
-  sessions: [],
-  analyticsEvents: [],
-  users: [],
-  groupChats: []
-});
-
-export type PersistInvalidateHook = () => void;
+import { Pool } from "pg";
+import type { QueryResultRow } from "pg";
+import { Signer } from "@aws-sdk/rds-signer";
+import { env } from "../env.js";
 
 export class Database {
-  private readonly filePath: string;
-  private state: DbShape;
+  readonly pool: Pool;
 
-  constructor(
-    env: Env,
-    private readonly onAfterPersist?: PersistInvalidateHook
-  ) {
-    if (!env.DATABASE_PATH.trim()) {
-      throw new Error("DATABASE_PATH is empty");
+  constructor() {
+    if (!env.DATABASE_URL.trim()) {
+      throw new Error("DATABASE_URL is empty");
+    }
+    if (env.DATABASE_USE_IAM) {
+      const parsed = new URL(env.DATABASE_URL);
+      const host = env.DATABASE_IAM_HOST?.trim() || parsed.hostname;
+      const port = env.DATABASE_IAM_PORT || Number(parsed.port || 5432);
+      const user = env.DATABASE_IAM_USER?.trim() || decodeURIComponent(parsed.username || "postgres");
+      const database = env.DATABASE_IAM_DBNAME?.trim() || parsed.pathname.replace(/^\//, "") || "postgres";
+      const region =
+        env.DATABASE_IAM_REGION?.trim() ||
+        this.inferRegionFromHost(host) ||
+        (() => {
+          throw new Error("DATABASE_IAM_REGION is required when DATABASE_USE_IAM=true");
+        })();
+
+      const signer = new Signer({
+        region,
+        hostname: host,
+        port,
+        username: user
+      });
+
+      this.pool = new Pool({
+        host,
+        port,
+        database,
+        user,
+        password: async () => signer.getAuthToken(),
+        ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : undefined
+      });
+      return;
     }
 
-    const resolved = path.resolve(env.DATABASE_PATH);
-    fs.mkdirSync(path.dirname(resolved), { recursive: true });
-    this.filePath = resolved;
-
-    if (!fs.existsSync(this.filePath)) {
-      this.state = emptyState();
-      this.persist();
-    } else {
-      const loaded = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as Partial<DbShape>;
-      this.state = {
-        messages: loaded.messages ?? [],
-        actionLogs: loaded.actionLogs ?? [],
-        sessions: loaded.sessions ?? [],
-        analyticsEvents: loaded.analyticsEvents ?? [],
-        users: loaded.users ?? [],
-        groupChats: loaded.groupChats ?? []
-      };
-      this.persist();
-    }
+    this.pool = new Pool({
+      connectionString: env.DATABASE_URL,
+      ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : undefined
+    });
   }
 
-  get messages(): DbShape["messages"] {
-    return this.state.messages;
+  private inferRegionFromHost(host: string): string | null {
+    const match = host.match(/\.([a-z]{2}-[a-z]+-\d)\.rds\.amazonaws\.com$/);
+    return match?.[1] ?? null;
   }
 
-  get actionLogs(): DbShape["actionLogs"] {
-    return this.state.actionLogs;
+  async query<T extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    params: unknown[] = []
+  ): Promise<T[]> {
+    const result = await this.pool.query<T>(sql, params);
+    return result.rows;
   }
 
-  get sessions(): DbShape["sessions"] {
-    return this.state.sessions;
-  }
-
-  get analyticsEvents(): DbShape["analyticsEvents"] {
-    return this.state.analyticsEvents;
-  }
-
-  get users(): DbShape["users"] {
-    return this.state.users;
-  }
-
-  get groupChats(): DbShape["groupChats"] {
-    return this.state.groupChats;
-  }
-
-  persist(): void {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), "utf8");
-    this.onAfterPersist?.();
+  async close(): Promise<void> {
+    await this.pool.end();
   }
 }

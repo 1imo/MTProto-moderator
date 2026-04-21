@@ -1,9 +1,6 @@
 import { env } from "./utils/env.js";
 import { Store } from "./utils/db/root.js";
-import path from "node:path";
 import process from "node:process";
-import fs from "node:fs";
-import os from "node:os";
 import { ActionQueueService } from "./bg-services/action-queue-service.js";
 import { AuthHttpService } from "./bg-services/auth-http-service.js";
 import { MgmtBotService } from "./bg-services/mgmt-bot-service.js";
@@ -22,23 +19,12 @@ import { BotRoutes } from "./routes/bot.js";
 import { MtprotoRoutes } from "./routes/mtproto.js";
 import { Analytics } from "./utils/analytics.js";
 import { Logger } from "./utils/logger.js";
+import { HandlePolicyUseCase } from "./use-cases/handle-policy.js";
 import { ProcessIncomingMessageUseCase } from "./use-cases/process-incoming-message.js";
 
 export const store = new Store();
 
 void startApp();
-
-function getFirstLocalIpv4(): string {
-  const interfaces = os.networkInterfaces();
-  for (const values of Object.values(interfaces)) {
-    for (const net of values ?? []) {
-      if (net.family === "IPv4" && !net.internal) {
-        return net.address;
-      }
-    }
-  }
-  return "127.0.0.1";
-}
 
 export async function startApp(): Promise<void> {
   const logger = new Logger();
@@ -47,19 +33,11 @@ export async function startApp(): Promise<void> {
   const messages = new MessageRepository(store);
   const actionLogs = new ActionLogRepository(store);
   const sessions = new SessionRepository(store);
-
-  const firstMessageReplyText = fs
-    .readFileSync(path.resolve("assets/messages/message.txt"), "utf8")
-    .trim();
   const actionService = new ActionService(logger);
   const actionQueue = new ActionQueueService(logger);
   const authChallenges = new AuthChallengeService();
   const notifications = new ClientNotificationService(logger);
-
-  const authHostBase =
-    env.AUTH_HOST_BASE && env.AUTH_HOST_BASE.trim().length > 0
-      ? env.AUTH_HOST_BASE
-      : `http://${getFirstLocalIpv4()}:${env.AUTH_HTTP_PORT}`;
+  const handlePolicyUseCase = new HandlePolicyUseCase(notifications, analytics, logger);
 
   const useCase = new ProcessIncomingMessageUseCase(
     messages,
@@ -68,7 +46,6 @@ export async function startApp(): Promise<void> {
     actionQueue,
     analytics,
     logger,
-    firstMessageReplyText,
     notifications
   );
 
@@ -84,11 +61,11 @@ export async function startApp(): Promise<void> {
   );
 
   const onboarding = new OnboardingUseCase(
-    authHostBase,
     authChallenges,
     sessions,
     mtprotoService,
     notifications,
+    analytics,
     logger
   );
 
@@ -96,12 +73,13 @@ export async function startApp(): Promise<void> {
   const botController = new BotController(onboarding, notifications, logger);
   const botService = new MgmtBotService(
     env.MGMT_BOT_TOKEN,
-    (bot) => new BotRoutes(bot, { controller: botController, handleUserMiddleware }).bind(),
+    (bot) =>
+      new BotRoutes(bot, { controller: botController, handleUserMiddleware, handlePolicyUseCase }).bind(),
     notifications,
     logger
   );
 
-  await mtprotoService.startActiveSessions(sessions.listActive());
+  await mtprotoService.startActiveSessions(await sessions.listActive());
   await authHttpService.start();
   await botService.start();
 
@@ -110,6 +88,7 @@ export async function startApp(): Promise<void> {
     await botService.stop();
     await authHttpService.stop();
     await mtprotoService.stop();
+    await store.close();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

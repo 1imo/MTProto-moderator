@@ -4,8 +4,8 @@ import type { Store } from "../utils/db/root.js";
 export class MessageRepository {
   constructor(private readonly store: Store) {}
 
-  save(message: IncomingMessage): void {
-    this.store.write(
+  async save(message: IncomingMessage): Promise<void> {
+    await this.store.write(
       "messages.insert",
       message.senderId,
       message.chatId,
@@ -13,7 +13,7 @@ export class MessageRepository {
     );
   }
 
-  countBySender(senderId: string): number {
+  async countBySender(senderId: string): Promise<number> {
     return this.store.read<number>("messages.count_by_sender", 0, senderId);
   }
 }

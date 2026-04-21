@@ -34,11 +34,25 @@ export class ClientNotificationService {
   }
 
   async sendHTML(clientUserId: string, html: string): Promise<boolean> {
-    const plain = html
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    return this.sendToClient(clientUserId, plain);
+    if (!this.bot) {
+      this.logger.warn("client_notification_skipped_bot_unavailable", { clientUserId });
+      return false;
+    }
+
+    const userId = Number(clientUserId);
+    if (!Number.isFinite(userId)) {
+      this.logger.warn("client_notification_skipped_invalid_user_id", { clientUserId });
+      return false;
+    }
+
+    try {
+      await this.bot.telegram.sendMessage(userId, html, { parse_mode: "HTML" });
+      this.logger.info("client_notification_sent_html", { clientUserId });
+      return true;
+    } catch (error) {
+      this.logger.error("client_notification_html_failed", { clientUserId, error: String(error) });
+      return false;
+    }
   }
 
   async sendHTMLFile(clientUserId: string, filePath: string): Promise<boolean> {

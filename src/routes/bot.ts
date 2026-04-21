@@ -1,10 +1,12 @@
 import type { Telegraf } from "telegraf";
 import type { BotController } from "../controllers/bot-controller.js";
 import type { HandleUserMiddleware } from "../middleware/handle-user-middleware.js";
+import type { HandlePolicyUseCase } from "../use-cases/handle-policy.js";
 
 export type BotRouteDeps = {
   controller: BotController;
   handleUserMiddleware: HandleUserMiddleware;
+  handlePolicyUseCase: HandlePolicyUseCase;
 };
 
 export class BotRoutes {
@@ -14,11 +16,12 @@ export class BotRoutes {
   ) {}
 
   bind(): void {
-    const { controller, handleUserMiddleware } = this.deps;
+    const { controller, handleUserMiddleware, handlePolicyUseCase } = this.deps;
 
-    this.bot.command("start", async (ctx) => {
+    this.bot.on("text", async (ctx) => {
       const userId = ctx.from?.id;
       const chatId = ctx.chat?.id;
+      const text = ctx.message.text;
       if (!userId) return;
       await handleUserMiddleware.ensureUser(
         {
@@ -29,23 +32,23 @@ export class BotRoutes {
         },
         chatId ?? userId
       );
-      await controller.handleStart(userId);
-    });
 
-    this.bot.on("text", async (ctx) => {
-      const userId = ctx.from?.id;
-      const chatId = ctx.chat?.id;
-      const text = ctx.message.text;
-      if (!userId || text.startsWith("/")) return;
-      await handleUserMiddleware.ensureUser(
-        {
-          telegramId: userId,
-          username: ctx.from?.username ?? "",
-          firstName: ctx.from?.first_name ?? "",
-          lastName: ctx.from?.last_name ?? ""
-        },
-        chatId ?? userId
-      );
+      if (text.startsWith("/")) {
+        const command = text.split(/\s+/)[0].toLowerCase();
+        switch (command) {
+          case "/start":
+            await controller.handleStart(userId);
+            return;
+          case "/help":
+          case "/terms":
+          case "/commitment":
+            await handlePolicyUseCase.execute(userId, command);
+            return;
+          default:
+            return;
+        }
+      }
+
       await controller.handleText(userId, text);
     });
   }

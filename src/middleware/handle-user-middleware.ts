@@ -25,7 +25,14 @@ export class HandleUserMiddleware {
     }
 
     const now = new Date().toISOString();
-    this.store.write("users.upsert", user.telegramId, user.username, user.firstName, user.lastName, now);
-    this.store.write("group_chats.upsert_if_needed", chatId, now);
+    await this.store.write(
+      "users.upsert",
+      user.telegramId,
+      user.username,
+      user.firstName,
+      user.lastName,
+      now
+    );
+    await this.store.write("group_chats.upsert_if_needed", chatId, now);
   }
 }

@@ -4,15 +4,15 @@ import type { Store } from "../utils/db/root.js";
 export class SessionRepository {
   constructor(private readonly store: Store) {}
 
-  listActive(): SessionRecord[] {
+  async listActive(): Promise<SessionRecord[]> {
     return this.store.read<SessionRecord[]>("sessions.list_active", 3000);
   }
 
-  findByUserId(userId: string): SessionRecord | null {
+  async findByUserId(userId: string): Promise<SessionRecord | null> {
     return this.store.read<SessionRecord | null>("sessions.find_by_user_id", 0, userId);
   }
 
-  upsertActive(userId: string, sessionString: string): void {
-    this.store.write("sessions.upsert_active", userId, sessionString, new Date().toISOString());
+  async upsertActive(userId: string, sessionString: string): Promise<void> {
+    await this.store.write("sessions.upsert_active", userId, sessionString, new Date().toISOString());
   }
 }

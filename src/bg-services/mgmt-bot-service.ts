@@ -19,10 +19,20 @@ export class MgmtBotService {
     }
     const bot = new Telegraf(this.token);
     this.bindRoutes(bot);
-    await bot.launch();
+    // Attach early so notification sends work during startup too.
     this.notifications.attachBot(bot);
     this.bot = bot;
-    this.logger.info("mgmt_bot_started");
+    this.logger.info("mgmt_bot_launching");
+    try {
+      // Explicit probe so failures (invalid token / network / DNS) are visible before long-polling.
+      const me = await bot.telegram.getMe();
+      this.logger.info("mgmt_bot_identity_ok", { username: me.username, id: me.id });
+      await bot.launch();
+      this.logger.info("mgmt_bot_started");
+    } catch (error) {
+      this.bot = undefined;
+      this.logger.error("mgmt_bot_launch_failed", { error: String(error) });
+    }
   }
 
   async stop(): Promise<void> {

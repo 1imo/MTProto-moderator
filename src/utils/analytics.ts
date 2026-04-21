@@ -14,9 +14,9 @@ export class Analytics {
 
   /** Schedules persist on the next event-loop turn; returns immediately (does not await store). */
   trackEvent(name: string, props: Record<string, unknown>): void {
-    setImmediate(() => {
+    setImmediate(async () => {
       try {
-        this.store.write("analytics.insert", name, props, new Date().toISOString());
+        await this.store.write("analytics.insert", name, props, new Date().toISOString());
       } catch (error) {
         this.logger.error("analytics_persist_failed", { event: name, error: String(error) });
       }
