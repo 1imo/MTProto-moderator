@@ -10,6 +10,7 @@ export interface IncomingMessage {
   sessionId: string;
   chatId: string;
   senderId: string;
+  senderUsername?: string;
   text: string;
   date: Date;
 }

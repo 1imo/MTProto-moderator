@@ -24,6 +24,9 @@ export class HandlePolicyUseCase {
       case "/commitment":
         filePath = path.resolve("assets/policies/commitment.html");
         break;
+      case "/sponsor":
+        filePath = path.resolve("assets/policies/sponsor.html");
+        break;
       default:
         return;
     }

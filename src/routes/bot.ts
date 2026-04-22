@@ -42,7 +42,11 @@ export class BotRoutes {
           case "/help":
           case "/terms":
           case "/commitment":
+          case "/sponsor":
             await handlePolicyUseCase.execute(userId, command);
+            return;
+          case "/toggle":
+            await controller.handleToggleOnOff(userId);
             return;
           default:
             return;

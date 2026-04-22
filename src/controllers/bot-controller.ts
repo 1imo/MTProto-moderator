@@ -1,10 +1,12 @@
 import type { OnboardingUseCase } from "../use-cases/onboarding.js";
 import type { ClientNotificationService } from "../services/client-notification-service.js";
 import type { Logger } from "../utils/logger.js";
+import type { ToggleModerationUseCase } from "../use-cases/toggle-moderation.js";
 
 export class BotController {
   constructor(
     private readonly onboarding: OnboardingUseCase,
+    private readonly toggleModeration: ToggleModerationUseCase,
     private readonly notifications: ClientNotificationService,
     private readonly logger: Logger
   ) {}
@@ -30,6 +32,17 @@ export class BotController {
       },
       async () => {
         await this.notifications.sendToClient(String(userId), "message handling failed");
+      }
+    );
+  }
+
+  async handleToggleOnOff(userId: number): Promise<void> {
+    await this.guard(
+      async () => {
+        await this.toggleModeration.execute(userId);
+      },
+      async () => {
+        await this.notifications.sendToClient(String(userId), "toggle failed");
       }
     );
   }

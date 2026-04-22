@@ -1,6 +1,5 @@
 import { ActionLogRepository } from "../repositories/action-log-repository.js";
 import { MessageRepository } from "../repositories/message-repository.js";
-import { ActionService } from "../services/action-service.js";
 import { ClientNotificationService } from "../services/client-notification-service.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,21 +8,24 @@ import { Analytics } from "../utils/analytics.js";
 import { Logger } from "../utils/logger.js";
 import { TelegramClient } from "telegram";
 import { ActionQueueService } from "../bg-services/action-queue-service.js";
+import { ExecuteModerationActionUseCase } from "./execute-moderation-action.js";
 
 export class ProcessIncomingMessageUseCase {
-  private readonly firstMessageReplyText: string;
+  private readonly firstMessageReplyHtmlTemplate: string;
 
   constructor(
     private readonly messages: MessageRepository,
     private readonly actions: ActionLogRepository,
-    private readonly actionService: ActionService,
+    private readonly executeModerationAction: ExecuteModerationActionUseCase,
     private readonly actionQueue: ActionQueueService,
     private readonly analytics: Analytics,
     private readonly logger: Logger,
     private readonly notifications: ClientNotificationService
   ) {
-    const messageHtml = fs.readFileSync(path.resolve("assets/messages/message.html"), "utf8");
-    this.firstMessageReplyText = messageHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    this.firstMessageReplyHtmlTemplate = fs.readFileSync(
+      path.resolve("assets/messages/message-warning.html"),
+      "utf8"
+    );
   }
 
   async execute(client: TelegramClient, message: IncomingMessage): Promise<void> {
@@ -48,7 +50,8 @@ export class ProcessIncomingMessageUseCase {
     });
 
     if (isFirstMessage) {
-      await this.sendReply(client, message.chatId, this.firstMessageReplyText);
+      const firstMessageReplyHtml = await this.buildFirstMessageReplyHtml(client);
+      await this.sendReply(client, message.chatId, firstMessageReplyHtml);
       this.analytics.trackEvent("first_message_reply_sent", {
         senderId: message.senderId,
         chatId: message.chatId
@@ -65,12 +68,15 @@ export class ProcessIncomingMessageUseCase {
         senderId: message.senderId,
         chatId: message.chatId
       });
-      await this.actionService.execute(client, {
+      await this.executeModerationAction.execute(client, {
         senderId: message.senderId,
         decision
       });
-      const notice = `We just blocked ${message.senderId}. Please unblock them if you'd like any further interaction.`;
-      const sentViaBot = await this.notifications.sendToClient(message.sessionId, notice);
+      const senderRef = message.senderUsername?.trim()
+        ? `@${this.escapeHtml(message.senderUsername.trim())}`
+        : `User ID ${this.escapeHtml(message.senderId)}`;
+      const noticeHtml = `We just blocked ${senderRef}. Please unblock them if you'd like any further interaction.`;
+      const sentViaBot = await this.notifications.sendHTML(message.sessionId, noticeHtml);
       this.analytics.trackEvent("block_notice_sent", {
         senderId: message.senderId,
         sessionId: message.sessionId,
@@ -78,19 +84,44 @@ export class ProcessIncomingMessageUseCase {
       });
       if (!sentViaBot) {
         // Fallback: ensure the client still receives the block notice even if bot delivery fails.
-        await this.sendReply(client, "me", notice);
+        await this.sendReply(client, "me", noticeHtml);
       }
     });
 
     this.logger.info("sender_queued_for_block", { senderId: message.senderId, chatId: message.chatId });
   }
 
-  private async sendReply(client: TelegramClient, chatId: string, text: string): Promise<void> {
+  private async sendReply(client: TelegramClient, chatId: string, html: string): Promise<void> {
     try {
       const entity = await client.getInputEntity(chatId);
-      await client.sendMessage(entity, { message: text });
+      await client.sendMessage(entity, { message: html, parseMode: "html" });
     } catch (error) {
       this.logger.error("failed_to_send_reply", { chatId, error: String(error) });
     }
+  }
+
+  private async buildFirstMessageReplyHtml(client: TelegramClient): Promise<string> {
+    try {
+      const me = await client.getMe();
+      const sessionUsername =
+        typeof (me as { username?: unknown }).username === "string" && (me as { username?: string }).username
+          ? `@${(me as { username: string }).username}`
+          : "This account";
+      return this.firstMessageReplyHtmlTemplate.replaceAll(
+        "{{SESSION_USERNAME}}",
+        this.escapeHtml(sessionUsername)
+      );
+    } catch (error) {
+      this.logger.warn("first_message_template_username_fallback", { error: String(error) });
+      return this.firstMessageReplyHtmlTemplate.replaceAll("{{SESSION_USERNAME}}", "This account");
+    }
+  }
+
+  private escapeHtml(input: string): string {
+    return input
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
   }
 }

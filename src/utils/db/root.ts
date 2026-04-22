@@ -64,6 +64,17 @@ export class Store {
         this.invalidateCache();
         return;
       }
+      case "sessions.set_active": {
+        const [userId, active, now] = args as [string, boolean, string];
+        await this.writeQueue.enqueue(query, async () => {
+          await this.backing.query(
+            `UPDATE sessions SET active = $2, updated_at = $3::timestamptz WHERE user_id = $1`,
+            [userId, active, now]
+          );
+        });
+        this.invalidateCache();
+        return;
+      }
       case "analytics.insert": {
         const [event, props, createdAt] = args as [string, Record<string, unknown>, string];
         await this.writeQueue.enqueue(query, async () => {

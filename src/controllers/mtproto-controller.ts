@@ -11,8 +11,11 @@ export class MtprotoController {
 
   async handleNewMessage(client: TelegramClient, sessionId: string, event: NewMessageEvent): Promise<void> {
     try {
-      const messageText = event.message?.message;
-      if (!messageText || !messageText.trim()) return;
+      const rawMessageText = event.message?.message;
+      const messageText =
+        typeof rawMessageText === "string" && rawMessageText.trim().length > 0
+          ? rawMessageText
+          : "[non-text message]";
       if (event.message.out) return;
       if (event.message.peerId?.className !== "PeerUser") return;
 
@@ -34,6 +37,7 @@ export class MtprotoController {
         sessionId,
         chatId,
         senderId,
+        senderUsername,
         text: messageText,
         date: new Date()
       });

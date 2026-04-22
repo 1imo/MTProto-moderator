@@ -50,8 +50,11 @@ export class ClientNotificationService {
       this.logger.info("client_notification_sent_html", { clientUserId });
       return true;
     } catch (error) {
-      this.logger.error("client_notification_html_failed", { clientUserId, error: String(error) });
-      return false;
+      this.logger.warn("client_notification_html_failed_fallback_to_text", {
+        clientUserId,
+        error: String(error)
+      });
+      return this.sendToClient(clientUserId, this.htmlToPlainText(html));
     }
   }
 
@@ -67,5 +70,25 @@ export class ClientNotificationService {
       });
       return false;
     }
+  }
+
+  private htmlToPlainText(html: string): string {
+    return html
+      .replace(/\r\n/g, "\n")
+      .replace(/<a[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi, "$2 ($1)")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|section|article|li|ul|ol|h1|h2|h3|h4|h5|h6)>/gi, "\n")
+      .replace(/<(p|div|section|article|ul|ol|h1|h2|h3|h4|h5|h6)[^>]*>/gi, "\n")
+      .replace(/<li[^>]*>/gi, "- ")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, "\"")
+      .replace(/&#39;/gi, "'")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   }
 }
