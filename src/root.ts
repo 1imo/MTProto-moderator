@@ -12,8 +12,10 @@ import { SessionModerationToggleMiddleware } from "./middleware/session-moderati
 import { ActionLogRepository } from "./repositories/action-log-repository.js";
 import { MessageRepository } from "./repositories/message-repository.js";
 import { SessionRepository } from "./repositories/session-repository.js";
+import path from "node:path";
 import { AuthChallengeService } from "./services/auth-challenge-service.js";
 import { ClientNotificationService } from "./services/client-notification-service.js";
+import { ExperimentService } from "./services/experiment-service.js";
 import { OnboardingUseCase } from "./use-cases/onboarding.js";
 import { BotRoutes } from "./routes/bot.js";
 import { MtprotoRoutes } from "./routes/mtproto.js";
@@ -42,6 +44,10 @@ export async function startApp(): Promise<void> {
   const notifications = new ClientNotificationService(logger);
   const handlePolicyUseCase = new HandlePolicyUseCase(notifications, analytics, logger);
   const toggleModerationUseCase = new ToggleModerationUseCase(sessions, notifications, analytics, logger);
+  const experiments = new ExperimentService(
+    [path.resolve("assets/messages/message-warning")],
+    logger
+  );
 
   const useCase = new ProcessIncomingMessageUseCase(
     messages,
@@ -50,7 +56,8 @@ export async function startApp(): Promise<void> {
     actionQueue,
     analytics,
     logger,
-    notifications
+    notifications,
+    experiments
   );
 
   const mtprotoController = new MtprotoController(useCase, logger);

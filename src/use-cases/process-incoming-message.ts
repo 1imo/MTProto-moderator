@@ -1,8 +1,7 @@
 import { ActionLogRepository } from "../repositories/action-log-repository.js";
 import { MessageRepository } from "../repositories/message-repository.js";
 import { ClientNotificationService } from "../services/client-notification-service.js";
-import fs from "node:fs";
-import path from "node:path";
+import { ExperimentService, type Assignment } from "../services/experiment-service.js";
 import { IncomingMessage, ModerationDecision } from "../types.js";
 import { Analytics } from "../utils/analytics.js";
 import { Logger } from "../utils/logger.js";
@@ -10,9 +9,9 @@ import { TelegramClient } from "telegram";
 import { ActionQueueService } from "../bg-services/action-queue-service.js";
 import { ExecuteModerationActionUseCase } from "./execute-moderation-action.js";
 
-export class ProcessIncomingMessageUseCase {
-  private readonly firstMessageReplyHtmlTemplate: string;
+const WARNING_EXPERIMENT_ID = "warning_copy_2026_05";
 
+export class ProcessIncomingMessageUseCase {
   constructor(
     private readonly messages: MessageRepository,
     private readonly actions: ActionLogRepository,
@@ -20,13 +19,9 @@ export class ProcessIncomingMessageUseCase {
     private readonly actionQueue: ActionQueueService,
     private readonly analytics: Analytics,
     private readonly logger: Logger,
-    private readonly notifications: ClientNotificationService
-  ) {
-    this.firstMessageReplyHtmlTemplate = fs.readFileSync(
-      path.resolve("assets/messages/message-warning.html"),
-      "utf8"
-    );
-  }
+    private readonly notifications: ClientNotificationService,
+    private readonly experiments: ExperimentService
+  ) {}
 
   async execute(client: TelegramClient, message: IncomingMessage): Promise<void> {
     await this.messages.save(message);
@@ -35,6 +30,10 @@ export class ProcessIncomingMessageUseCase {
     const decision: ModerationDecision = isFirstMessage
       ? { action: "allow", confidence: 1, reason: "first_message_reply_sent" }
       : { action: "block", confidence: 1, reason: "follow_up_message_auto_block" };
+
+    // Assignment is deterministic on senderId, so warning-side and block-side events
+    // share an identical variant tag without any persisted state.
+    const assignment = this.experiments.assign(WARNING_EXPERIMENT_ID, message.senderId);
 
     await this.actions.save({
       senderId: message.senderId,
@@ -46,19 +45,32 @@ export class ProcessIncomingMessageUseCase {
       senderId: message.senderId,
       chatId: message.chatId,
       action: decision.action,
-      confidence: decision.confidence
+      confidence: decision.confidence,
+      experiment: assignment.experimentId,
+      variant: assignment.variantId
     });
 
     if (isFirstMessage) {
-      const firstMessageReplyHtml = await this.buildFirstMessageReplyHtml(client);
-      await this.sendReply(client, message.chatId, firstMessageReplyHtml);
+      const firstMessageReplyHtml = await this.buildFirstMessageReplyHtml(client, assignment);
+      await this.sendFirstMessageReply(
+        client,
+        message.chatId,
+        firstMessageReplyHtml,
+        assignment.mediaPath
+      );
       this.analytics.trackEvent("first_message_reply_sent", {
         senderId: message.senderId,
-        chatId: message.chatId
+        chatId: message.chatId,
+        experiment: assignment.experimentId,
+        variant: assignment.variantId,
+        hasMedia: Boolean(assignment.mediaPath)
       });
       this.logger.info("first_message_reply_sent", {
         senderId: message.senderId,
-        chatId: message.chatId
+        chatId: message.chatId,
+        experiment: assignment.experimentId,
+        variant: assignment.variantId,
+        hasMedia: Boolean(assignment.mediaPath)
       });
       return;
     }
@@ -66,7 +78,9 @@ export class ProcessIncomingMessageUseCase {
     this.actionQueue.enqueue(async () => {
       this.analytics.trackEvent("sender_block_queued", {
         senderId: message.senderId,
-        chatId: message.chatId
+        chatId: message.chatId,
+        experiment: assignment.experimentId,
+        variant: assignment.variantId
       });
       await this.executeModerationAction.execute(client, {
         senderId: message.senderId,
@@ -80,7 +94,9 @@ export class ProcessIncomingMessageUseCase {
       this.analytics.trackEvent("block_notice_sent", {
         senderId: message.senderId,
         sessionId: message.sessionId,
-        sentViaBot
+        sentViaBot,
+        experiment: assignment.experimentId,
+        variant: assignment.variantId
       });
       if (!sentViaBot) {
         // Fallback: ensure the client still receives the block notice even if bot delivery fails.
@@ -88,7 +104,12 @@ export class ProcessIncomingMessageUseCase {
       }
     });
 
-    this.logger.info("sender_queued_for_block", { senderId: message.senderId, chatId: message.chatId });
+    this.logger.info("sender_queued_for_block", {
+      senderId: message.senderId,
+      chatId: message.chatId,
+      experiment: assignment.experimentId,
+      variant: assignment.variantId
+    });
   }
 
   private async sendReply(client: TelegramClient, chatId: string, html: string): Promise<void> {
@@ -100,20 +121,51 @@ export class ProcessIncomingMessageUseCase {
     }
   }
 
-  private async buildFirstMessageReplyHtml(client: TelegramClient): Promise<string> {
+  private async sendFirstMessageReply(
+    client: TelegramClient,
+    chatId: string,
+    html: string,
+    mediaPath: string | undefined
+  ): Promise<void> {
+    if (!mediaPath) {
+      await this.sendReply(client, chatId, html);
+      return;
+    }
+    try {
+      const entity = await client.getInputEntity(chatId);
+      await client.sendFile(entity, {
+        file: mediaPath,
+        caption: html,
+        parseMode: "html"
+      });
+    } catch (error) {
+      this.logger.error("failed_to_send_media_reply", {
+        chatId,
+        mediaPath,
+        error: String(error)
+      });
+      // Fall back to text-only so the warning still lands even if the media upload fails.
+      await this.sendReply(client, chatId, html);
+    }
+  }
+
+  private async buildFirstMessageReplyHtml(
+    client: TelegramClient,
+    assignment: Assignment
+  ): Promise<string> {
     try {
       const me = await client.getMe();
       const sessionUsername =
         typeof (me as { username?: unknown }).username === "string" && (me as { username?: string }).username
           ? `@${(me as { username: string }).username}`
           : "This account";
-      return this.firstMessageReplyHtmlTemplate.replaceAll(
+      return assignment.html.replaceAll(
         "{{SESSION_USERNAME}}",
         this.escapeHtml(sessionUsername)
       );
     } catch (error) {
       this.logger.warn("first_message_template_username_fallback", { error: String(error) });
-      return this.firstMessageReplyHtmlTemplate.replaceAll("{{SESSION_USERNAME}}", "This account");
+      return assignment.html.replaceAll("{{SESSION_USERNAME}}", "This account");
     }
   }
 

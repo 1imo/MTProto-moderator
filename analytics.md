@@ -14,7 +14,7 @@ Storage shape in JSON DB:
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
 - **When:** Incoming non-secret message is evaluated for first-reply vs block
-- **Props:** `senderId`, `chatId`, `action`, `confidence`
+- **Props:** `senderId`, `chatId`, `action`, `confidence`, `experiment`, `variant`
 
 ### `user_ensure_rejected`
 
@@ -62,19 +62,36 @@ Storage shape in JSON DB:
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
 - **When:** First non-secret incoming message is replied to
-- **Props:** `senderId`, `chatId`
+- **Props:** `senderId`, `chatId`, `experiment`, `variant`
 
 ### `sender_block_queued`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
 - **When:** Follow-up sender is queued for block execution
-- **Props:** `senderId`, `chatId`
+- **Props:** `senderId`, `chatId`, `experiment`, `variant`
 
 ### `block_notice_sent`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
 - **When:** Client block notification is attempted
-- **Props:** `senderId`, `sessionId`, `sentViaBot`
+- **Props:** `senderId`, `sessionId`, `sentViaBot`, `experiment`, `variant`
+
+## Experiments
+
+`experiment` and `variant` are stamped by `ExperimentService` (`src/services/experiment-service.ts`). Manifests live alongside the templates they control, e.g. `assets/messages/message-warning/manifest.json`. Assignment is a deterministic hash of `(experimentId, senderId)`, so warning-side and block-side events for the same sender always carry the same variant tag without persisting an exposures table.
+
+Conversion query for the warning experiment:
+
+```sql
+SELECT
+  props_json->>'variant' AS variant,
+  COUNT(*) FILTER (WHERE event = 'first_message_reply_sent') AS warned,
+  COUNT(*) FILTER (WHERE event = 'sender_block_queued')      AS blocked
+FROM analytics_events
+WHERE props_json->>'experiment' = 'warning_copy_2026_05'
+GROUP BY 1
+ORDER BY 1;
+```
 
 ## Notes
 
