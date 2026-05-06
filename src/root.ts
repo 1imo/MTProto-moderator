@@ -45,7 +45,11 @@ export async function startApp(): Promise<void> {
   const handlePolicyUseCase = new HandlePolicyUseCase(notifications, analytics, logger);
   const toggleModerationUseCase = new ToggleModerationUseCase(sessions, notifications, analytics, logger);
   const experiments = new ExperimentService(
-    [path.resolve("assets/messages/message-warning")],
+    [
+      path.resolve("assets/messages/message-warning"),
+      path.resolve("assets/messages/message-warning-final"),
+      path.resolve("assets/messages/messages-block")
+    ],
     logger
   );
 

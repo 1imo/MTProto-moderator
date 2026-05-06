@@ -1,0 +1,16 @@
+{
+  "experiment": "level2_message_warning_final",
+  "variants": [
+    {
+      "id": "001",
+      "file": "variant-001.html",
+      "weight": 1
+    },
+    {
+      "id": "002",
+      "file": "variant-002.html",
+      "media": "variant-002.mp4",
+      "weight": 1
+    }
+  ]
+}

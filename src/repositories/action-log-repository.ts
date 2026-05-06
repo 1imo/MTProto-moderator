@@ -4,6 +4,10 @@ import type { Store } from "../utils/db/root.js";
 export class ActionLogRepository {
   constructor(private readonly store: Store) {}
 
+  async hasPriorBlock(senderId: string): Promise<boolean> {
+    return this.store.read<boolean>("action_logs.has_prior_block", 0, senderId);
+  }
+
   async save(input: {
     senderId: string;
     chatId: string;

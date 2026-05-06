@@ -13,8 +13,8 @@ Storage shape in JSON DB:
 ### `moderation_decision`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
-- **When:** Incoming non-secret message is evaluated for first-reply vs block
-- **Props:** `senderId`, `chatId`, `action`, `confidence`, `experiment`, `variant`
+- **When:** Incoming non-secret message is evaluated for the 3-step flow (level-1 warning → level-2 final warning → block)
+- **Props:** `senderId`, `chatId`, `action`, `confidence`, `experiment`, `variant`, `tier` (`first_warning` | `second_warning` | `block`)
 
 ### `user_ensure_rejected`
 
@@ -61,13 +61,19 @@ Storage shape in JSON DB:
 ### `first_message_reply_sent`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
-- **When:** First non-secret incoming message is replied to
-- **Props:** `senderId`, `chatId`, `experiment`, `variant`
+- **When:** First non-secret incoming message is replied to (`message-warning` copy)
+- **Props:** `senderId`, `chatId`, `experiment`, `variant`, `hasMedia`
+
+### `second_message_warning_sent`
+
+- **Source:** `src/use-cases/process-incoming-message.ts`
+- **When:** Second non-secret incoming message is replied to (`message-warning-final` copy)
+- **Props:** `senderId`, `chatId`, `experiment`, `variant`, `hasMedia`
 
 ### `sender_block_queued`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
-- **When:** Follow-up sender is queued for block execution
+- **When:** Third or later non-secret message queues block execution (`messages-block` copy)
 - **Props:** `senderId`, `chatId`, `experiment`, `variant`
 
 ### `block_notice_sent`
@@ -78,19 +84,30 @@ Storage shape in JSON DB:
 
 ## Experiments
 
-`experiment` and `variant` are stamped by `ExperimentService` (`src/services/experiment-service.ts`). Manifests live alongside the templates they control, e.g. `assets/messages/message-warning/manifest.json`. Assignment is a deterministic hash of `(experimentId, senderId)`, so warning-side and block-side events for the same sender always carry the same variant tag without persisting an exposures table.
+`experiment` and `variant` are stamped by `ExperimentService` (`src/services/experiment-service.ts`). Active manifests:
 
-Conversion query for the warning experiment:
+- **`level1_message_warning`** — `assets/messages/message-warning/manifest.json` (first reply)
+- **`level2_message_warning_final`** — `assets/messages/message-warning-final/manifest.json` (second reply)
+- **`level3_messages_block`** — `assets/messages/messages-block/manifest.json` (block DM)
+
+For moderation steps, tiers use **`assignModerationTier`**, which hashes `moderation_flow_2026_05:${senderId}` and takes `digest % totalWeight` for each manifest. Tier 2 and tier 3 both use total weight 2, so the **same variant id** is chosen for the final warning and the block message for a given sender. Tier 1 uses total weight 4 (four first-warning variants).
+
+Volume by tier (each step records its own `experiment` id):
 
 ```sql
 SELECT
-  props_json->>'variant' AS variant,
-  COUNT(*) FILTER (WHERE event = 'first_message_reply_sent') AS warned,
-  COUNT(*) FILTER (WHERE event = 'sender_block_queued')      AS blocked
+  event,
+  props_json->>'experiment' AS experiment,
+  props_json->>'variant'   AS variant,
+  COUNT(*) AS n
 FROM analytics_events
-WHERE props_json->>'experiment' = 'warning_copy_2026_05'
-GROUP BY 1
-ORDER BY 1;
+WHERE event IN (
+  'first_message_reply_sent',
+  'second_message_warning_sent',
+  'sender_block_queued'
+)
+GROUP BY 1, 2, 3
+ORDER BY 2, 3, 1;
 ```
 
 ## Notes

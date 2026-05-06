@@ -41,18 +41,30 @@ Runtime logs are emitted through `Logger` in `src/utils/logger.ts` to stdout as 
 ### `message=first_message_reply_sent`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
-- **When:** First non-secret message receives automated reply
-- **Fields:** `senderId`, `chatId`
+- **When:** First non-secret message receives level-1 warning reply
+- **Fields:** `senderId`, `chatId`, `experiment`, `variant`, `hasMedia`
+
+### `message=second_message_warning_sent`
+
+- **Source:** `src/use-cases/process-incoming-message.ts`
+- **When:** Second non-secret message receives level-2 (final warning) reply
+- **Fields:** `senderId`, `chatId`, `experiment`, `variant`, `hasMedia`
 
 ### `message=sender_queued_for_block`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
-- **When:** Sender is queued for block after follow-up non-secret message
+- **When:** Sender is queued for block after third (or later) non-secret message
+- **Fields:** `senderId`, `chatId`, `experiment`, `variant`
+
+### `message=moderation_skipped_prior_block`
+
+- **Source:** `src/use-cases/process-incoming-message.ts`
+- **When:** Inbound DM from someone who already has a logged block decision — no automated action taken
 - **Fields:** `senderId`, `chatId`
 
 ### `message=sender_blocked` / `message=failed_to_block_sender`
 
-- **Source:** `src/services/action-service.ts`
+- **Source:** `src/use-cases/execute-moderation-action.ts`
 - **When:** Block operation succeeds/fails
 - **Fields:** `senderId` (+ `error` on failure)
 

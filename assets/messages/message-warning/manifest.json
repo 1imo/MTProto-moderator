@@ -1,7 +1,9 @@
 {
-  "experiment": "warning_copy_2026_05",
+  "experiment": "level1_message_warning",
   "variants": [
     { "id": "001", "file": "variant-001.html", "weight": 1 },
-    { "id": "002", "file": "variant-002.html", "media": "variant-002.mp4", "weight": 1 }
+    { "id": "002", "file": "variant-002.html", "media": "variant-002.mp4", "weight": 1 },
+    { "id": "003", "file": "variant-003.html", "weight": 1 },
+    { "id": "004", "file": "variant-004.html", "weight": 1 }
   ]
 }

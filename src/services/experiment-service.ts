@@ -4,14 +4,19 @@ import path from "node:path";
 import { z } from "zod";
 import type { Logger } from "../utils/logger.js";
 
-// Reject path separators / parent traversal so manifest entries can only point at
-// siblings inside their own experiment directory.
+// Filename only: lives next to manifest.json inside the experiment directory.
 const safeBasename = z
   .string()
   .min(1)
   .refine((s) => !s.includes("/") && !s.includes("\\") && s !== "." && s !== "..", {
     message: "must be a bare filename within the experiment directory"
   });
+
+// Relative path from the experiment dir (allows ../sibling-folder/file); resolved path must stay under dirname(experiment dir).
+const safeRelFromExperiment = z
+  .string()
+  .min(1)
+  .refine((s) => !path.isAbsolute(s), { message: "blockFile must be a relative path" });
 
 const manifestSchema = z.object({
   experiment: z.string().min(1),
@@ -20,6 +25,7 @@ const manifestSchema = z.object({
       z.object({
         id: z.string().min(1),
         file: safeBasename,
+        blockFile: safeRelFromExperiment.optional(),
         media: safeBasename.optional(),
         weight: z.number().int().nonnegative()
       })
@@ -31,10 +37,14 @@ const manifestSchema = z.object({
 const TELEGRAM_CAPTION_MAX = 1024;
 const CAPTION_SUBSTITUTION_BUFFER = 64;
 
+/** Same key for all moderation tiers so digest % totalWeight pairs tier-2 and tier-3 when both use the same weight sum. */
+const MODERATION_FLOW_SUBJECT_PREFIX = "moderation_flow_2026_05";
+
 type LoadedVariant = {
   id: string;
   weight: number;
   html: string;
+  blockHtml?: string;
   mediaPath?: string;
 };
 
@@ -48,6 +58,7 @@ export type Assignment = {
   experimentId: string;
   variantId: string;
   html: string;
+  blockHtml?: string;
   mediaPath?: string;
 };
 
@@ -74,6 +85,7 @@ export class ExperimentService {
           id: v.id,
           weight: v.weight,
           bytes: v.html.length,
+          hasBlock: Boolean(v.blockHtml),
           hasMedia: Boolean(v.mediaPath)
         }))
       });
@@ -84,21 +96,53 @@ export class ExperimentService {
     const exp = this.experiments.get(experimentId);
     if (!exp) throw new Error(`unknown_experiment: ${experimentId}`);
     const bucket = this.hashToBucket(`${experimentId}:${subjectId}`, exp.totalWeight);
+    return this.pickWeightedForBucket(exp, bucket);
+  }
+
+  /**
+   * Deterministic tier pick for the 3-step DM flow (message-warning → message-warning-final → messages-block).
+   * Hash input omits experimentId so tiers with identical total weights (e.g. 2 vs 2) reuse the same variant slot.
+   */
+  assignModerationTier(experimentId: string, subjectId: string): Assignment {
+    const exp = this.experiments.get(experimentId);
+    if (!exp) throw new Error(`unknown_experiment: ${experimentId}`);
+    const bucket = this.hashToBucket(`${MODERATION_FLOW_SUBJECT_PREFIX}:${subjectId}`, exp.totalWeight);
+    return this.pickWeightedForBucket(exp, bucket);
+  }
+
+  private pickWeightedForBucket(exp: LoadedExperiment, bucket: number): Assignment {
+    const { experimentId } = exp;
     let cursor = 0;
     for (const v of exp.variants) {
       cursor += v.weight;
       if (bucket < cursor) {
-        return { experimentId, variantId: v.id, html: v.html, mediaPath: v.mediaPath };
+        return {
+          experimentId,
+          variantId: v.id,
+          html: v.html,
+          blockHtml: v.blockHtml,
+          mediaPath: v.mediaPath
+        };
       }
     }
-    // Unreachable while totalWeight === sum(weights) and weights are non-negative integers.
     const fallback = exp.variants[0];
     return {
       experimentId,
       variantId: fallback.id,
       html: fallback.html,
+      blockHtml: fallback.blockHtml,
       mediaPath: fallback.mediaPath
     };
+  }
+
+  private resolveUnderMessagesBundle(experimentDir: string, relPath: string): string {
+    const bundleRoot = path.resolve(experimentDir, "..");
+    const resolved = path.resolve(experimentDir, relPath.replaceAll("\\", path.sep));
+    const rel = path.relative(bundleRoot, resolved);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      throw new Error(`experiment_path_escape: ${relPath} -> ${resolved} (bundle=${bundleRoot})`);
+    }
+    return resolved;
   }
 
   private loadExperiment(dir: string): LoadedExperiment {
@@ -114,6 +158,13 @@ export class ExperimentService {
       throw new Error(`experiment_has_no_active_variants: ${manifest.experiment}`);
     }
 
+    const withBlockFile = enabled.filter((x) => x.blockFile !== undefined && x.blockFile.trim() !== "");
+    if (withBlockFile.length > 0 && withBlockFile.length !== enabled.length) {
+      throw new Error(
+        `experiment_blockFile_mismatch: ${manifest.experiment} (blockFile required on every variant when used)`
+      );
+    }
+
     const variants: LoadedVariant[] = enabled.map((v) => {
       const filePath = path.join(dir, v.file);
       if (!fs.existsSync(filePath)) {
@@ -126,6 +177,22 @@ export class ExperimentService {
         throw new Error(
           `experiment_variant_file_empty: ${manifest.experiment}/${v.id} -> ${filePath}`
         );
+      }
+
+      let blockHtml: string | undefined;
+      if (v.blockFile) {
+        const blockPath = this.resolveUnderMessagesBundle(dir, v.blockFile);
+        if (!fs.existsSync(blockPath)) {
+          throw new Error(
+            `experiment_variant_block_file_missing: ${manifest.experiment}/${v.id} -> ${blockPath}`
+          );
+        }
+        blockHtml = fs.readFileSync(blockPath, "utf8");
+        if (blockHtml.trim().length === 0) {
+          throw new Error(
+            `experiment_variant_block_file_empty: ${manifest.experiment}/${v.id} -> ${blockPath}`
+          );
+        }
       }
 
       let mediaPath: string | undefined;
@@ -150,7 +217,7 @@ export class ExperimentService {
         }
       }
 
-      return { id: v.id, weight: v.weight, html, mediaPath };
+      return { id: v.id, weight: v.weight, html, blockHtml, mediaPath };
     });
 
     const totalWeight = variants.reduce((sum, v) => sum + v.weight, 0);
