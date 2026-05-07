@@ -27,7 +27,25 @@ export class ProcessIncomingMessageUseCase {
 
   async execute(client: TelegramClient, message: IncomingMessage): Promise<void> {
     await this.messages.save(message);
-    if (await this.actions.hasPriorBlock(message.senderId)) {
+    if (await this.actions.hasPriorBlock(message.senderId, message.chatId)) {
+      const decision: ModerationDecision = {
+        action: "ignore",
+        confidence: 1,
+        reason: "prior_block_in_chat_skip"
+      };
+      await this.actions.save({
+        senderId: message.senderId,
+        chatId: message.chatId,
+        decision
+      });
+      this.analytics.trackEvent("moderation_decision", {
+        senderId: message.senderId,
+        chatId: message.chatId,
+        action: decision.action,
+        confidence: decision.confidence,
+        reason: decision.reason,
+        tier: "skipped_prior_block"
+      });
       this.logger.info("moderation_skipped_prior_block", {
         senderId: message.senderId,
         chatId: message.chatId

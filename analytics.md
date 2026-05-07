@@ -13,8 +13,8 @@ Storage shape in JSON DB:
 ### `moderation_decision`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
-- **When:** Incoming non-secret message is evaluated for the 3-step flow (level-1 warning → level-2 final warning → block)
-- **Props:** `senderId`, `chatId`, `action`, `confidence`, `experiment`, `variant`, `tier` (`first_warning` | `second_warning` | `block`)
+- **When:** Incoming non-secret message is evaluated for the 3-step flow (level-1 warning → level-2 final warning → block), or skipped for a chat-scoped prior block
+- **Props:** `senderId`, `chatId`, `action`, `confidence`, optional `reason`, optional `experiment`, optional `variant`, `tier` (`first_warning` | `second_warning` | `block` | `skipped_prior_block`)
 
 ### `user_ensure_rejected`
 
@@ -76,6 +76,12 @@ Storage shape in JSON DB:
 - **When:** Third or later non-secret message queues block execution (`messages-block` copy)
 - **Props:** `senderId`, `chatId`, `experiment`, `variant`
 
+### `moderation_skipped_prior_block`
+
+- **Source:** `src/use-cases/process-incoming-message.ts`
+- **When:** A prior `block` decision already exists for the same `(senderId, chatId)` pair, so no additional warning/block action is sent
+- **Props:** `senderId`, `chatId`
+
 ### `block_notice_sent`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
@@ -108,6 +114,21 @@ WHERE event IN (
 )
 GROUP BY 1, 2, 3
 ORDER BY 2, 3, 1;
+```
+
+Skip visibility (shows chat-scoped ignore rows that still log a moderation decision):
+
+```sql
+SELECT
+  created_at,
+  sender_id,
+  chat_id,
+  decision_json
+FROM action_logs
+WHERE decision_json->>'action' = 'ignore'
+  AND decision_json->>'reason' = 'prior_block_in_chat_skip'
+ORDER BY created_at DESC
+LIMIT 200;
 ```
 
 ## Notes

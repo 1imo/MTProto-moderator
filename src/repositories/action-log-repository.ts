@@ -4,8 +4,8 @@ import type { Store } from "../utils/db/root.js";
 export class ActionLogRepository {
   constructor(private readonly store: Store) {}
 
-  async hasPriorBlock(senderId: string): Promise<boolean> {
-    return this.store.read<boolean>("action_logs.has_prior_block", 0, senderId);
+  async hasPriorBlock(senderId: string, chatId: string): Promise<boolean> {
+    return this.store.read<boolean>("action_logs.has_prior_block", 0, senderId, chatId);
   }
 
   async save(input: {

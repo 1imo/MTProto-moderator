@@ -163,14 +163,15 @@ export class Store {
         return Number(rows[0]?.n ?? 0) as T;
       }
       case "action_logs.has_prior_block": {
-        const [senderId] = args as [string];
+        const [senderId, chatId] = args as [string, string];
         const rows = await this.backing.query<{ exists: boolean }>(
           `SELECT EXISTS (
              SELECT 1 FROM action_logs
              WHERE sender_id = $1
+               AND chat_id = $2
                AND decision_json->>'action' = 'block'
            ) AS exists`,
-          [senderId]
+          [senderId, chatId]
         );
         return Boolean(rows[0]?.exists) as T;
       }
