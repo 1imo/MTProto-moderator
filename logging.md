@@ -62,6 +62,18 @@ Runtime logs are emitted through `Logger` in `src/utils/logger.ts` to stdout as 
 - **When:** Inbound DM from someone who already has a logged block decision — no automated action taken
 - **Fields:** `senderId`, `chatId`
 
+### `message=moderation_duplicate_inbound_skipped`
+
+- **Source:** `src/use-cases/process-incoming-message.ts`
+- **When:** Duplicate Telegram message id within the same chat was ignored after dedupe
+- **Fields:** `senderId`, `chatId`, `messageId`, `source`
+
+### `message=chat_automation_*`
+
+- **Source:** `src/controllers/chat-automation-controller.ts`
+- **When:** Bot API automation path resolves `getBusinessConnection`, checks session, or runs moderation
+- **Fields:** varies (`chat_automation_no_mtproto_session`, `chat_automation_get_connection_failed`, etc.)
+
 ### `message=sender_blocked` / `message=failed_to_block_sender`
 
 - **Source:** `src/use-cases/execute-moderation-action.ts`

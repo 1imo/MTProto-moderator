@@ -30,10 +30,18 @@ export class DeferredWriteQueue {
     private readonly breakerCooldownMs = 15000
   ) {}
 
+  /** Serializes writes; await the returned promise to know persistence finished. */
   enqueue(name: string, run: QueueTask): Promise<void> {
     return new Promise((resolve, reject) => {
       this.pending.push({ name, run, attempts: 0, resolve, reject });
       this.kick();
+    });
+  }
+
+  /** Same queue, but the caller is not blocked (errors reject an internal promise). */
+  enqueueFireAndForget(name: string, run: QueueTask, onError?: (error: Error) => void): void {
+    void this.enqueue(name, run).catch((error) => {
+      onError?.(error instanceof Error ? error : new Error(String(error)));
     });
   }
 

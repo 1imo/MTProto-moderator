@@ -1,10 +1,12 @@
 import { ActionLogRepository } from "../repositories/action-log-repository.js";
 import { MessageRepository } from "../repositories/message-repository.js";
+import { InboundMessageDedupe } from "../services/inbound-message-dedupe.js";
 import { ClientNotificationService } from "../services/client-notification-service.js";
 import { ExperimentService, type Assignment } from "../services/experiment-service.js";
 import { IncomingMessage, ModerationDecision } from "../types.js";
 import { Analytics } from "../utils/analytics.js";
 import { Logger } from "../utils/logger.js";
+import { resolveOutboundPeer } from "../utils/mtproto-resolve-outbound-peer.js";
 import { TelegramClient } from "telegram";
 import { ActionQueueService } from "../bg-services/action-queue-service.js";
 import { ExecuteModerationActionUseCase } from "./execute-moderation-action.js";
@@ -14,8 +16,11 @@ const LEVEL2_WARNING_FINAL_EXPERIMENT_ID = "level2_message_warning_final";
 const LEVEL3_BLOCK_EXPERIMENT_ID = "level3_messages_block";
 
 export class ProcessIncomingMessageUseCase {
+  private readonly sessionUsernameByClient = new WeakMap<TelegramClient, string>();
+
   constructor(
     private readonly messages: MessageRepository,
+    private readonly dedupe: InboundMessageDedupe,
     private readonly actions: ActionLogRepository,
     private readonly executeModerationAction: ExecuteModerationActionUseCase,
     private readonly actionQueue: ActionQueueService,
@@ -26,6 +31,26 @@ export class ProcessIncomingMessageUseCase {
   ) {}
 
   async execute(client: TelegramClient, message: IncomingMessage): Promise<void> {
+    const msgId = message.telegramMessageId;
+    if (msgId != null && msgId > 0) {
+      const claimed = this.dedupe.tryClaim(message.chatId, msgId);
+      if (!claimed) {
+        this.analytics.trackEvent("moderation_duplicate_inbound_skipped", {
+          senderId: message.senderId,
+          chatId: message.chatId,
+          messageId: msgId,
+          source: message.source ?? "unknown"
+        });
+        this.logger.info("moderation_duplicate_inbound_skipped", {
+          senderId: message.senderId,
+          chatId: message.chatId,
+          messageId: msgId,
+          source: message.source ?? "unknown"
+        });
+        return;
+      }
+    }
+
     await this.messages.save(message);
     if (await this.actions.hasPriorBlock(message.senderId, message.chatId)) {
       const decision: ModerationDecision = {
@@ -33,7 +58,7 @@ export class ProcessIncomingMessageUseCase {
         confidence: 1,
         reason: "prior_block_in_chat_skip"
       };
-      await this.actions.save({
+      this.actions.saveDeferred({
         senderId: message.senderId,
         chatId: message.chatId,
         decision
@@ -71,12 +96,6 @@ export class ProcessIncomingMessageUseCase {
           ? { action: "allow", confidence: 1, reason: "second_message_warning_sent" }
           : { action: "allow", confidence: 1, reason: "first_message_reply_sent" };
 
-    await this.actions.save({
-      senderId: message.senderId,
-      chatId: message.chatId,
-      decision
-    });
-
     this.analytics.trackEvent("moderation_decision", {
       senderId: message.senderId,
       chatId: message.chatId,
@@ -89,12 +108,12 @@ export class ProcessIncomingMessageUseCase {
 
     if (tier === "first_warning" || tier === "second_warning") {
       const replyHtml = await this.buildReplyHtml(client, tierAssignment);
-      await this.sendFirstMessageReply(
-        client,
-        message.chatId,
-        replyHtml,
-        tierAssignment.mediaPath
-      );
+      await this.sendFirstMessageReply(client, message, replyHtml, tierAssignment.mediaPath);
+      this.actions.saveDeferred({
+        senderId: message.senderId,
+        chatId: message.chatId,
+        decision
+      });
       const eventName =
         tier === "first_warning" ? "first_message_reply_sent" : "second_message_warning_sent";
       this.analytics.trackEvent(eventName, {
@@ -114,6 +133,12 @@ export class ProcessIncomingMessageUseCase {
       return;
     }
 
+    this.actions.saveDeferred({
+      senderId: message.senderId,
+      chatId: message.chatId,
+      decision
+    });
+
     this.actionQueue.enqueue(async () => {
       this.analytics.trackEvent("sender_block_queued", {
         senderId: message.senderId,
@@ -125,7 +150,8 @@ export class ProcessIncomingMessageUseCase {
       await this.executeModerationAction.execute(client, {
         senderId: message.senderId,
         decision,
-        blockMessageHtml
+        blockMessageHtml,
+        moderationIncoming: message
       });
       const senderRef = message.senderUsername?.trim()
         ? `@${this.escapeHtml(message.senderUsername.trim())}`
@@ -152,6 +178,10 @@ export class ProcessIncomingMessageUseCase {
     });
   }
 
+  private getReplyInputPeer(client: TelegramClient, message: IncomingMessage) {
+    return resolveOutboundPeer(client, message, this.logger);
+  }
+
   private async sendReply(client: TelegramClient, chatId: string, html: string): Promise<void> {
     try {
       const entity = await client.getInputEntity(chatId);
@@ -161,18 +191,27 @@ export class ProcessIncomingMessageUseCase {
     }
   }
 
+  private async sendReplyToIncoming(client: TelegramClient, message: IncomingMessage, html: string): Promise<void> {
+    try {
+      const entity = await this.getReplyInputPeer(client, message);
+      await client.sendMessage(entity, { message: html, parseMode: "html" });
+    } catch (error) {
+      this.logger.error("failed_to_send_reply", { chatId: message.chatId, error: String(error) });
+    }
+  }
+
   private async sendFirstMessageReply(
     client: TelegramClient,
-    chatId: string,
+    message: IncomingMessage,
     html: string,
     mediaPath: string | undefined
   ): Promise<void> {
     if (!mediaPath) {
-      await this.sendReply(client, chatId, html);
+      await this.sendReplyToIncoming(client, message, html);
       return;
     }
     try {
-      const entity = await client.getInputEntity(chatId);
+      const entity = await this.getReplyInputPeer(client, message);
       await client.sendFile(entity, {
         file: mediaPath,
         caption: html,
@@ -180,11 +219,11 @@ export class ProcessIncomingMessageUseCase {
       });
     } catch (error) {
       this.logger.error("failed_to_send_media_reply", {
-        chatId,
+        chatId: message.chatId,
         mediaPath,
         error: String(error)
       });
-      await this.sendReply(client, chatId, html);
+      await this.sendReplyToIncoming(client, message, html);
     }
   }
 
@@ -193,16 +232,27 @@ export class ProcessIncomingMessageUseCase {
   }
 
   private async substituteSessionUsernameHtml(client: TelegramClient, html: string): Promise<string> {
+    const sessionUsername = await this.getSessionUsernameLabel(client);
+    return html.replaceAll("{{SESSION_USERNAME}}", this.escapeHtml(sessionUsername));
+  }
+
+  private async getSessionUsernameLabel(client: TelegramClient): Promise<string> {
+    const cached = this.sessionUsernameByClient.get(client);
+    if (cached) return cached;
+
     try {
       const me = await client.getMe();
-      const sessionUsername =
+      const label =
         typeof (me as { username?: unknown }).username === "string" && (me as { username?: string }).username
           ? `@${(me as { username: string }).username}`
           : "This account";
-      return html.replaceAll("{{SESSION_USERNAME}}", this.escapeHtml(sessionUsername));
+      this.sessionUsernameByClient.set(client, label);
+      return label;
     } catch (error) {
       this.logger.warn("template_username_fallback", { error: String(error) });
-      return html.replaceAll("{{SESSION_USERNAME}}", "This account");
+      const fallback = "This account";
+      this.sessionUsernameByClient.set(client, fallback);
+      return fallback;
     }
   }
 

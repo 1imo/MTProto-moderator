@@ -15,12 +15,18 @@
     {
       "id": "003",
       "file": "variant-003.html",
-      "weight": 1
+      "weight": 0
     },
     {
       "id": "004",
       "file": "variant-004.html",
       "media": "variant-004.mp4",
+      "weight": 0
+    },
+    {
+      "id": "005",
+      "file": "variant-005.html",
+      "media": "variant-005.mp4",
       "weight": 1
     }
   ]

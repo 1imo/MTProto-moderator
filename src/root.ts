@@ -6,6 +6,7 @@ import { AuthHttpService } from "./bg-services/auth-http-service.js";
 import { MgmtBotService } from "./bg-services/mgmt-bot-service.js";
 import { MtprotoListenerService } from "./bg-services/mtproto-listener-service.js";
 import { BotController } from "./controllers/bot-controller.js";
+import { ChatAutomationController } from "./controllers/chat-automation-controller.js";
 import { MtprotoController } from "./controllers/mtproto-controller.js";
 import { HandleUserMiddleware } from "./middleware/handle-user-middleware.js";
 import { SessionModerationToggleMiddleware } from "./middleware/session-moderation-toggle-middleware.js";
@@ -15,6 +16,7 @@ import { SessionRepository } from "./repositories/session-repository.js";
 import path from "node:path";
 import { AuthChallengeService } from "./services/auth-challenge-service.js";
 import { ClientNotificationService } from "./services/client-notification-service.js";
+import { InboundMessageDedupe } from "./services/inbound-message-dedupe.js";
 import { ExperimentService } from "./services/experiment-service.js";
 import { OnboardingUseCase } from "./use-cases/onboarding.js";
 import { BotRoutes } from "./routes/bot.js";
@@ -35,6 +37,7 @@ export async function startApp(): Promise<void> {
   const analytics = new Analytics(store, logger);
   const handleUserMiddleware = new HandleUserMiddleware(store, analytics);
   const messages = new MessageRepository(store);
+  const inboundDedupe = new InboundMessageDedupe();
   const actionLogs = new ActionLogRepository(store);
   const sessions = new SessionRepository(store);
   const sessionModerationToggle = new SessionModerationToggleMiddleware(sessions);
@@ -55,6 +58,7 @@ export async function startApp(): Promise<void> {
 
   const useCase = new ProcessIncomingMessageUseCase(
     messages,
+    inboundDedupe,
     actionLogs,
     executeModerationAction,
     actionQueue,
@@ -86,10 +90,21 @@ export async function startApp(): Promise<void> {
 
   const authHttpService = new AuthHttpService(env.AUTH_HTTP_PORT, authChallenges, logger);
   const botController = new BotController(onboarding, toggleModerationUseCase, notifications, logger);
+  const chatAutomationController = new ChatAutomationController(
+    useCase,
+    sessionModerationToggle,
+    mtprotoService,
+    logger
+  );
   const botService = new MgmtBotService(
     env.MGMT_BOT_TOKEN,
     (bot) =>
-      new BotRoutes(bot, { controller: botController, handleUserMiddleware, handlePolicyUseCase }).bind(),
+      new BotRoutes(bot, {
+        controller: botController,
+        chatAutomation: chatAutomationController,
+        handleUserMiddleware,
+        handlePolicyUseCase
+      }).bind(),
     notifications,
     logger
   );

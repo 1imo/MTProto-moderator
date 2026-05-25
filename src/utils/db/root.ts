@@ -1,6 +1,6 @@
 import { Database } from "./database.js";
 import { DeferredWriteQueue } from "./queue.js";
-import type { ModerationDecision } from "../../types.js";
+import type { ModerationDecision, SessionRecord } from "../../types.js";
 
 type CacheEntry = {
   expiresAt: number;
@@ -12,6 +12,10 @@ export class Store {
   private readonly cache = new Map<string, CacheEntry>();
   private readonly writeQueue = new DeferredWriteQueue();
 
+  /** Write-through session cache (userId → record or null if known absent). */
+  private readonly sessionByUserId = new Map<string, SessionRecord | null>();
+  private listActiveSnapshot: SessionRecord[] | undefined;
+
   constructor() {
     this.backing = new Database();
   }
@@ -21,38 +25,43 @@ export class Store {
   }
 
   async write(query: string, ...args: unknown[]): Promise<void> {
-    switch (query) {
-      case "messages.insert": {
-        const [senderId, chatId, createdAt] = args as [string, string, string];
-        await this.writeQueue.enqueue(query, async () => {
+    await this.persist(query, args, true);
+  }
+
+  /** Enqueue persistence without blocking the caller (used for non-critical audit writes). */
+  writeDeferred(query: string, ...args: unknown[]): void {
+    void this.persist(query, args, false);
+  }
+
+  private async persist(query: string, args: unknown[], wait: boolean): Promise<void> {
+    const run = async () => {
+      switch (query) {
+        case "messages.insert": {
+          const [senderId, chatId, createdAt] = args as [string, string, string];
           await this.backing.query(
             `INSERT INTO messages(sender_id, chat_id, created_at) VALUES ($1, $2, $3::timestamptz)`,
             [senderId, chatId, createdAt]
           );
-        });
-        this.invalidateCache();
-        return;
-      }
-      case "action_logs.insert": {
-        const [senderId, chatId, decision, createdAt] = args as [
-          string,
-          string,
-          ModerationDecision,
-          string
-        ];
-        await this.writeQueue.enqueue(query, async () => {
+          this.invalidateQueryCache();
+          return;
+        }
+        case "action_logs.insert": {
+          const [senderId, chatId, decision, createdAt] = args as [
+            string,
+            string,
+            ModerationDecision,
+            string
+          ];
           await this.backing.query(
             `INSERT INTO action_logs(sender_id, chat_id, decision_json, created_at)
              VALUES ($1, $2, $3::jsonb, $4::timestamptz)`,
             [senderId, chatId, JSON.stringify(decision), createdAt]
           );
-        });
-        this.invalidateCache();
-        return;
-      }
-      case "sessions.upsert_active": {
-        const [userId, sessionString, now] = args as [string, string, string];
-        await this.writeQueue.enqueue(query, async () => {
+          this.invalidateQueryCache();
+          return;
+        }
+        case "sessions.upsert_active": {
+          const [userId, sessionString, now] = args as [string, string, string];
           await this.backing.query(
             `INSERT INTO sessions(user_id, session_string, active, created_at, updated_at)
              VALUES ($1, $2, TRUE, $3::timestamptz, $3::timestamptz)
@@ -60,42 +69,34 @@ export class Store {
              DO UPDATE SET session_string = EXCLUDED.session_string, active = TRUE, updated_at = EXCLUDED.updated_at`,
             [userId, sessionString, now]
           );
-        });
-        this.invalidateCache();
-        return;
-      }
-      case "sessions.set_active": {
-        const [userId, active, now] = args as [string, boolean, string];
-        await this.writeQueue.enqueue(query, async () => {
+          return;
+        }
+        case "sessions.set_active": {
+          const [userId, active, now] = args as [string, boolean, string];
           await this.backing.query(
             `UPDATE sessions SET active = $2, updated_at = $3::timestamptz WHERE user_id = $1`,
             [userId, active, now]
           );
-        });
-        this.invalidateCache();
-        return;
-      }
-      case "analytics.insert": {
-        const [event, props, createdAt] = args as [string, Record<string, unknown>, string];
-        await this.writeQueue.enqueue(query, async () => {
+          return;
+        }
+        case "analytics.insert": {
+          const [event, props, createdAt] = args as [string, Record<string, unknown>, string];
           await this.backing.query(
             `INSERT INTO analytics_events(event, props_json, created_at)
              VALUES ($1, $2::jsonb, $3::timestamptz)`,
             [event, JSON.stringify(props), createdAt]
           );
-        });
-        this.invalidateCache();
-        return;
-      }
-      case "users.upsert": {
-        const [telegramId, username, firstName, lastName, now] = args as [
-          number,
-          string,
-          string,
-          string,
-          string
-        ];
-        await this.writeQueue.enqueue(query, async () => {
+          this.invalidateQueryCache();
+          return;
+        }
+        case "users.upsert": {
+          const [telegramId, username, firstName, lastName, now] = args as [
+            number,
+            string,
+            string,
+            string,
+            string
+          ];
           await this.backing.query(
             `INSERT INTO users(telegram_id, username, first_name, last_name, last_seen_at, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5::timestamptz, $5::timestamptz, $5::timestamptz)
@@ -108,14 +109,12 @@ export class Store {
                updated_at = NOW()`,
             [telegramId, username, firstName, lastName, now]
           );
-        });
-        this.invalidateCache();
-        return;
-      }
-      case "group_chats.upsert_if_needed": {
-        const [chatId, now] = args as [number, string];
-        if (chatId >= 0) return;
-        await this.writeQueue.enqueue(query, async () => {
+          this.invalidateQueryCache();
+          return;
+        }
+        case "group_chats.upsert_if_needed": {
+          const [chatId, now] = args as [number, string];
+          if (chatId >= 0) return;
           await this.backing.query(
             `INSERT INTO group_chats(telegram_id, first_seen_at, last_seen_at, created_at, updated_at)
              VALUES ($1, $2::timestamptz, $2::timestamptz, $2::timestamptz, $2::timestamptz)
@@ -123,16 +122,53 @@ export class Store {
              DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, updated_at = NOW()`,
             [chatId, now]
           );
-        });
-        this.invalidateCache();
-        return;
+          this.invalidateQueryCache();
+          return;
+        }
+        default:
+          throw new Error(`unknown write query: ${query}`);
       }
-      default:
-        throw new Error(`unknown write query: ${query}`);
+    };
+
+    if (query === "sessions.upsert_active") {
+      const [userId, sessionString] = args as [string, string, string];
+      this.putSessionCache({
+        userId,
+        sessionString,
+        active: true
+      });
+    } else if (query === "sessions.set_active") {
+      const [userId, active] = args as [string, boolean, string];
+      const existing = this.sessionByUserId.get(userId);
+      if (existing) {
+        this.putSessionCache({ ...existing, active });
+      } else {
+        this.putSessionCache({
+          userId,
+          sessionString: "",
+          active
+        });
+      }
     }
+
+    if (wait) {
+      await this.writeQueue.enqueue(query, run);
+      return;
+    }
+
+    this.writeQueue.enqueueFireAndForget(query, run);
   }
 
   async read<T>(query: string, cacheLifetimeMs = 0, ...args: unknown[]): Promise<T> {
+    if (query === "sessions.find_by_user_id") {
+      const [userId] = args as [string];
+      return this.readSessionByUserId(userId) as Promise<T>;
+    }
+
+    if (query === "sessions.list_active") {
+      return this.readSessionsListActive() as Promise<T>;
+    }
+
     const now = Date.now();
     const cacheKey = this.buildCacheKey(query, args);
     if (cacheLifetimeMs > 0) {
@@ -150,6 +186,29 @@ export class Store {
       });
     }
     return result;
+  }
+
+  private async readSessionByUserId(userId: string): Promise<SessionRecord | null> {
+    if (this.sessionByUserId.has(userId)) {
+      return this.sessionByUserId.get(userId) ?? null;
+    }
+    const record = await this.executeRead<SessionRecord | null>("sessions.find_by_user_id", [userId]);
+    this.sessionByUserId.set(userId, record);
+    return record;
+  }
+
+  private async readSessionsListActive(): Promise<SessionRecord[]> {
+    if (this.listActiveSnapshot) {
+      return this.listActiveSnapshot;
+    }
+    const rows = await this.executeRead<SessionRecord[]>("sessions.list_active", []);
+    this.listActiveSnapshot = rows;
+    return rows;
+  }
+
+  private putSessionCache(record: SessionRecord): void {
+    this.sessionByUserId.set(record.userId, record);
+    this.listActiveSnapshot = undefined;
   }
 
   private async executeRead<T>(query: string, args: unknown[]): Promise<T> {
@@ -211,7 +270,7 @@ export class Store {
     return `${query}:${JSON.stringify(args)}`;
   }
 
-  private invalidateCache(): void {
+  private invalidateQueryCache(): void {
     this.cache.clear();
   }
 }

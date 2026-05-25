@@ -10,6 +10,12 @@ Storage shape in JSON DB:
 
 ## Event catalog
 
+### `moderation_duplicate_inbound_skipped`
+
+- **Source:** `src/use-cases/process-incoming-message.ts`
+- **When:** The same Telegram `(chat_id, message_id)` was already processed (typically MTProto + Bot API/automation duplicate delivery).
+- **Props:** `senderId`, `chatId`, `messageId`, `source` (`mtproto` | `bot_api_automation` | `unknown`)
+
 ### `moderation_decision`
 
 - **Source:** `src/use-cases/process-incoming-message.ts`
@@ -130,6 +136,12 @@ WHERE decision_json->>'action' = 'ignore'
 ORDER BY created_at DESC
 LIMIT 200;
 ```
+
+## Chat automation (Bot API) vs MTProto
+
+- **Ingest:** `src/routes/bot.ts` runs `ChatAutomationController` first. Updates that carry `business_message` or `message.business_connection_id` are treated as inbound mail for a connected account ([Bot API BusinessConnection](https://core.telegram.org/bots/api#getbusinessconnection) / Telegram’s profile automation rollout).
+- **Act:** Responses and blocks still run through **`TelegramClient`** (MTProto session) for that account, so onboarding / `sessions` must be active (`src/controllers/chat-automation-controller.ts`). The management bot token is reused today; split tokens later if Telegram requires a dedicated automation bot.
+- **Dedupe:** in-process `InboundMessageDedupe` keeps recent `(chat_id, message_id)` keys (TTL ~30m, bounded size) so the same message is not moderated twice across MTProto + Bot API in one Node process (`src/services/inbound-message-dedupe.ts`). Not shared across multiple app instances.
 
 ## Notes
 

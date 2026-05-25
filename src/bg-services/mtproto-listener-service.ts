@@ -49,6 +49,10 @@ export class MtprotoListenerService {
     }
   }
 
+  getClient(sessionId: string): TelegramClient | undefined {
+    return this.clients.get(sessionId);
+  }
+
   async stop(): Promise<void> {
     for (const [sessionId, client] of this.clients.entries()) {
       await client.disconnect();

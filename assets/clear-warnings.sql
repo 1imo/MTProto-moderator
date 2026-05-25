@@ -3,8 +3,7 @@
 DO $body$
 DECLARE
   sender_ids TEXT[] := ARRAY[
-    '8392122581',
-    '6412617720'
+    '8939428561'
   ];
 BEGIN
   DELETE FROM messages WHERE sender_id = ANY(sender_ids);

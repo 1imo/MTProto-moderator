@@ -21,4 +21,18 @@ export class ActionLogRepository {
       new Date().toISOString()
     );
   }
+
+  saveDeferred(input: {
+    senderId: string;
+    chatId: string;
+    decision: ModerationDecision;
+  }): void {
+    this.store.writeDeferred(
+      "action_logs.insert",
+      input.senderId,
+      input.chatId,
+      input.decision,
+      new Date().toISOString()
+    );
+  }
 }

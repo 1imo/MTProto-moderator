@@ -19,13 +19,15 @@ export class MtprotoController {
       if (event.message.out) return;
       if (event.message.peerId?.className !== "PeerUser") return;
 
-      const sender = await event.message.getSender();
+      // Prefer entities bundled with the update — avoid getSender()/getInputChat() network fallbacks.
+      const sender = event.message.sender;
       const senderUsername =
-        typeof (sender as { username?: unknown })?.username === "string"
-          ? String((sender as { username?: string }).username)
+        typeof (sender as { username?: unknown } | undefined)?.username === "string"
+          ? String((sender as { username: string }).username)
           : "";
       const isBotSender =
-        (sender as { bot?: unknown })?.bot === true ||
+        Boolean(event.message.viaBotId) ||
+        (sender as { bot?: unknown } | undefined)?.bot === true ||
         senderUsername.toLowerCase().endsWith("bot");
       if (isBotSender) return;
 
@@ -33,13 +35,22 @@ export class MtprotoController {
       const chatId = event.message.chatId?.toString();
       if (!senderId || !chatId) return;
 
+      const telegramMessageId =
+        typeof event.message.id === "number" && event.message.id > 0 ? event.message.id : undefined;
+
+      const mtprotoReplyEntity = event.message.inputChat ?? undefined;
+
       await this.useCase.execute(client, {
         sessionId,
         chatId,
         senderId,
         senderUsername,
         text: messageText,
-        date: new Date()
+        date: new Date(),
+        telegramMessageId,
+        source: "mtproto",
+        mtprotoReplyEntity: mtprotoReplyEntity ?? undefined,
+        mtprotoPeer: event.message.peerId
       });
     } catch (error) {
       this.logger.error("mtproto_event_handler_failed", { error: String(error) });
