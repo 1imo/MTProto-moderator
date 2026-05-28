@@ -14,6 +14,7 @@ import { ExecuteModerationActionUseCase } from "./execute-moderation-action.js";
 const LEVEL1_WARNING_EXPERIMENT_ID = "level1_message_warning";
 const LEVEL2_WARNING_FINAL_EXPERIMENT_ID = "level2_message_warning_final";
 const LEVEL3_BLOCK_EXPERIMENT_ID = "level3_messages_block";
+const MESSAGING_INSTANCE_COLLAPSE_WINDOW_SECONDS = 20;
 
 export class ProcessIncomingMessageUseCase {
   private readonly sessionUsernameByClient = new WeakMap<TelegramClient, string>();
@@ -31,6 +32,20 @@ export class ProcessIncomingMessageUseCase {
   ) {}
 
   async execute(client: TelegramClient, message: IncomingMessage): Promise<void> {
+    if (message.senderIsBot === true) {
+      this.analytics.trackEvent("moderation_skipped_bot_sender", {
+        senderId: message.senderId,
+        chatId: message.chatId,
+        source: message.source ?? "unknown"
+      });
+      this.logger.info("moderation_skipped_bot_sender", {
+        senderId: message.senderId,
+        chatId: message.chatId,
+        source: message.source ?? "unknown"
+      });
+      return;
+    }
+
     const msgId = message.telegramMessageId;
     if (msgId != null && msgId > 0) {
       const claimed = this.dedupe.tryClaim(message.chatId, msgId);
@@ -78,7 +93,10 @@ export class ProcessIncomingMessageUseCase {
       return;
     }
 
-    const count = await this.messages.countBySender(message.senderId);
+    const count = await this.messages.countBySender(
+      message.senderId,
+      MESSAGING_INSTANCE_COLLAPSE_WINDOW_SECONDS
+    );
     const tier: "first_warning" | "second_warning" | "block" =
       count === 1 ? "first_warning" : count === 2 ? "second_warning" : "block";
 

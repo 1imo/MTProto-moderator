@@ -13,7 +13,7 @@ export class MessageRepository {
     );
   }
 
-  async countBySender(senderId: string): Promise<number> {
-    return this.store.read<number>("messages.count_by_sender", 0, senderId);
+  async countBySender(senderId: string, collapseWindowSeconds = 0): Promise<number> {
+    return this.store.read<number>("messages.count_by_sender", 0, senderId, collapseWindowSeconds);
   }
 }

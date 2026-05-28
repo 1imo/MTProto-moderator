@@ -21,6 +21,7 @@ export interface IncomingMessage {
   chatId: string;
   senderId: string;
   senderUsername?: string;
+  senderIsBot?: boolean;
   text: string;
   date: Date;
   /** Telegram server message id within this chat; enables cross-transport dedupe when both are set */

@@ -214,10 +214,28 @@ export class Store {
   private async executeRead<T>(query: string, args: unknown[]): Promise<T> {
     switch (query) {
       case "messages.count_by_sender": {
-        const [senderId] = args as [string];
+        const [senderId, collapseWindowSeconds = 0] = args as [string, number?];
+        if (collapseWindowSeconds <= 0) {
+          const rows = await this.backing.query<{ n: string }>(
+            `SELECT COUNT(*)::text AS n FROM messages WHERE sender_id = $1`,
+            [senderId]
+          );
+          return Number(rows[0]?.n ?? 0) as T;
+        }
+
         const rows = await this.backing.query<{ n: string }>(
-          `SELECT COUNT(*)::text AS n FROM messages WHERE sender_id = $1`,
-          [senderId]
+          `WITH ordered AS (
+             SELECT
+               created_at,
+               LAG(created_at) OVER (ORDER BY created_at) AS previous_created_at
+             FROM messages
+             WHERE sender_id = $1
+           )
+           SELECT COUNT(*)::text AS n
+           FROM ordered
+           WHERE previous_created_at IS NULL
+              OR created_at - previous_created_at > make_interval(secs => $2)`,
+          [senderId, collapseWindowSeconds]
         );
         return Number(rows[0]?.n ?? 0) as T;
       }

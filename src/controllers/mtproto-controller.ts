@@ -45,6 +45,7 @@ export class MtprotoController {
         chatId,
         senderId,
         senderUsername,
+        senderIsBot: isBotSender,
         text: messageText,
         date: new Date(),
         telegramMessageId,

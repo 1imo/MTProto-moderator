@@ -97,6 +97,7 @@ export class ChatAutomationController {
         chatId: String(msg.chat.id),
         senderId: String(from.id),
         senderUsername,
+        senderIsBot: Boolean(from.is_bot),
         text,
         date: new Date(),
         telegramMessageId: typeof msg.message_id === "number" ? msg.message_id : undefined,
