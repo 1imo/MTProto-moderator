@@ -97,6 +97,39 @@ export class ProcessIncomingMessageUseCase {
       message.senderId,
       MESSAGING_INSTANCE_COLLAPSE_WINDOW_SECONDS
     );
+    const inInstanceCount = await this.messages.countInMessagingInstance(
+      message.senderId,
+      message.date,
+      MESSAGING_INSTANCE_COLLAPSE_WINDOW_SECONDS
+    );
+    if (inInstanceCount > 1) {
+      const decision: ModerationDecision = {
+        action: "ignore",
+        confidence: 1,
+        reason: "messaging_instance_burst_skip"
+      };
+      this.actions.saveDeferred({
+        senderId: message.senderId,
+        chatId: message.chatId,
+        decision
+      });
+      this.analytics.trackEvent("moderation_decision", {
+        senderId: message.senderId,
+        chatId: message.chatId,
+        action: decision.action,
+        confidence: decision.confidence,
+        reason: decision.reason,
+        tier: "skipped_burst",
+        instanceMessageCount: inInstanceCount
+      });
+      this.logger.info("moderation_skipped_messaging_burst", {
+        senderId: message.senderId,
+        chatId: message.chatId,
+        instanceMessageCount: inInstanceCount
+      });
+      return;
+    }
+
     const tier: "first_warning" | "second_warning" | "block" =
       count === 1 ? "first_warning" : count === 2 ? "second_warning" : "block";
 

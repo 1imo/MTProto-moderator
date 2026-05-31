@@ -16,4 +16,19 @@ export class MessageRepository {
   async countBySender(senderId: string, collapseWindowSeconds = 0): Promise<number> {
     return this.store.read<number>("messages.count_by_sender", 0, senderId, collapseWindowSeconds);
   }
+
+  /** Messages from sender within the collapse window ending at `at` (inclusive). */
+  async countInMessagingInstance(
+    senderId: string,
+    at: Date,
+    collapseWindowSeconds: number
+  ): Promise<number> {
+    return this.store.read<number>(
+      "messages.count_in_instance",
+      0,
+      senderId,
+      at.toISOString(),
+      collapseWindowSeconds
+    );
+  }
 }

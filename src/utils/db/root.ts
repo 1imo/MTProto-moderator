@@ -239,6 +239,18 @@ export class Store {
         );
         return Number(rows[0]?.n ?? 0) as T;
       }
+      case "messages.count_in_instance": {
+        const [senderId, atIso, collapseWindowSeconds] = args as [string, string, number];
+        const rows = await this.backing.query<{ n: string }>(
+          `SELECT COUNT(*)::text AS n
+           FROM messages
+           WHERE sender_id = $1
+             AND created_at <= $2::timestamptz
+             AND created_at > $2::timestamptz - make_interval(secs => $3)`,
+          [senderId, atIso, collapseWindowSeconds]
+        );
+        return Number(rows[0]?.n ?? 0) as T;
+      }
       case "action_logs.has_prior_block": {
         const [senderId, chatId] = args as [string, string];
         const rows = await this.backing.query<{ exists: boolean }>(
